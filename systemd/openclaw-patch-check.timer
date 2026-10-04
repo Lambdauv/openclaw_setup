@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic OpenClaw post-upgrade patch check (detects upgrade-clobbered patches)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

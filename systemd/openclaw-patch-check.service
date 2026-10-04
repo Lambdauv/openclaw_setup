@@ -1,0 +1,9 @@
+[Unit]
+Description=OpenClaw post-upgrade patch check — auto-heals (reapply+restart) + single Signal ping on drift
+After=openclaw-gateway.service
+
+[Service]
+Type=oneshot
+Environment=PATH=/home/openclaw/.local/bin:/home/openclaw/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/openclaw/operator.env
+ExecStart=/home/openclaw/.openclaw/scripts/post-upgrade.sh --autoheal

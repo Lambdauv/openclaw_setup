@@ -1,0 +1,15 @@
+# OpenClaw gateway memory hygiene — idle-aware proactive restart before V8-heap death (leak mitigation).
+# SOFT 2.5G at idle w/ 6h gap (silent) / HARD 5G immediate + Signal ping. See scripts/gateway-memory-hygiene.py.
+[Unit]
+Description=OpenClaw gateway memory hygiene (leak mitigation, idle-aware restart)
+
+[Service]
+Type=oneshot
+Environment=PATH=/home/openclaw/.local/bin:/home/openclaw/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/openclaw/operator.env
+# Tightened 2026-07-16: gateway oom-killed at 4.1G RSS (residual growth after the llama-leak
+# fix); HARD 3.5G restarts it BEFORE the 11G box swaps + the kernel oom-killer fires.
+Environment=HYGIENE_SOFT_GB=2.0
+Environment=HYGIENE_HARD_GB=3.5
+ExecStart=/usr/bin/python3 %h/.openclaw/scripts/gateway-memory-hygiene.py
+TimeoutStartSec=180
