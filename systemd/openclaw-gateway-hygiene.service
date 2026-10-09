@@ -9,7 +9,8 @@ Environment=PATH=/home/openclaw/.local/bin:/home/openclaw/.npm-global/bin:/usr/l
 EnvironmentFile=-%h/.config/openclaw/operator.env
 # Tightened 2026-07-16: gateway oom-killed at 4.1G RSS (residual growth after the llama-leak
 # fix); HARD 3.5G restarts it BEFORE the 11G box swaps + the kernel oom-killer fires.
-Environment=HYGIENE_SOFT_GB=2.0
-Environment=HYGIENE_HARD_GB=3.5
+Environment=HYGIENE_SOFT_GB=6.0
+Environment=HYGIENE_HARD_GB=10.0
+Environment=HYGIENE_HEAP_HARD_GB=7.2
 ExecStart=/usr/bin/python3 %h/.openclaw/scripts/gateway-memory-hygiene.py
 TimeoutStartSec=180
