@@ -1,4 +1,8 @@
-# Upstream issue draft — NOT FILED (needs Roger's OK; external send)
+# Upstream issue draft — NOT FILED; dropped 2026-10-13
+
+> Roger closed this item on 2026-10-13. Local patch 7 (`scripts/regraft-exec-abort-listener.sh`) fixes the leak, and the
+> gateway measured flat (4 d 7 h up at 1.5 GB RSS). Filing would only let upstream ship the fix so patch 7 can retire.
+> Kept for reference. Sending it is still an external action that needs Roger's OK.
 
 **Title:** exec tool leaks one AbortSignal listener per call, pinning the agent run context; gateway V8 heap OOMs every 1.5-3 days (2026.5.20)
 
