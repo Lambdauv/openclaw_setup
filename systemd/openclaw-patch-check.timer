@@ -2,8 +2,9 @@
 Description=Periodic OpenClaw post-upgrade patch check (detects upgrade-clobbered patches)
 
 [Timer]
+# 2026-10-13: OnCalendar, not OnUnitActiveSec — the latter stops rescheduling once its service stops (CLAUDE.md, loop-liveness).
 OnBootSec=3min
-OnUnitActiveSec=30min
+OnCalendar=*:0/30
 Persistent=true
 
 [Install]
