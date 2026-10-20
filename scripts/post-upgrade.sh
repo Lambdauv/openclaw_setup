@@ -48,8 +48,9 @@ check_stream(){    grep -q "openclaw-stream-progress" "$DIST"/selection-*.js 2>/
 check_qmdfts(){    grep -qF "split(/[.\/:-]+/)" "$QMD_STORE" 2>/dev/null; }   # qmd FTS dotted-identifier fix (clobbered on QMD upgrade)
 check_execabort(){ grep -qF "openclaw-exec-abort-listener" "$DIST"/bash-tools-*.js 2>/dev/null; }   # exec-tool abort-listener leak fix (gateway heap, 2026-10-01)
 check_cronontimer(){ bash "$SCRIPTS/regraft-cron-ontimer.sh" --check >/dev/null 2>&1; }   # cron scheduler: start jobs due behind a running batch (2026-10-14)
+check_cronsetupwd(){ bash "$SCRIPTS/regraft-cron-setup-watchdog.sh" --check >/dev/null 2>&1; }   # cron setup watchdog 60 s -> 60 min: a queued run survives the lane wait (2026-10-20)
 
-PATCHES="discord narrative slack subagent stream qmdfts execabort cronontimer"
+PATCHES="discord narrative slack subagent stream qmdfts execabort cronontimer cronsetupwd"
 
 # --- advisory presence (NOT a reapply patch): node-llama-cpp + embeddinggemma power
 #     the LOCAL memorySearch embeddings provider. Installed as an upgrade-DURABLE global
@@ -86,6 +87,7 @@ apply_all(){
   bash "$SCRIPTS/regraft-qmd-fts-tokenizer.sh"  2>&1 | sed 's/^/  qmdfts:    /' | tee -a "$LOG" || true
   bash "$SCRIPTS/regraft-exec-abort-listener.sh" 2>&1 | sed 's/^/  execabort: /' | tee -a "$LOG" || true
   bash "$SCRIPTS/regraft-cron-ontimer.sh"      2>&1 | sed 's/^/  cronontimer: /' | tee -a "$LOG" || true
+  bash "$SCRIPTS/regraft-cron-setup-watchdog.sh" 2>&1 | sed 's/^/  cronsetupwd: /' | tee -a "$LOG" || true
 }
 
 MODE="apply"

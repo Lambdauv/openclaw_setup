@@ -26,6 +26,7 @@ declare -A FILES=(
   ["scripts/regraft-discord-extension.sh"]="scripts/regraft-discord-extension.sh"
   ["scripts/regraft-exec-abort-listener.sh"]="scripts/regraft-exec-abort-listener.sh"
   ["scripts/regraft-cron-ontimer.sh"]="scripts/regraft-cron-ontimer.sh"
+  ["scripts/regraft-cron-setup-watchdog.sh"]="scripts/regraft-cron-setup-watchdog.sh"
   ["scripts/gateway-restart-when-idle.py"]="scripts/gateway-restart-when-idle.py"
   ["scripts/regraft-narrative-timeout.sh"]="scripts/regraft-narrative-timeout.sh"
   ["scripts/regraft-qmd-fts-tokenizer.sh"]="scripts/regraft-qmd-fts-tokenizer.sh"
