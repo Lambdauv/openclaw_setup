@@ -18,6 +18,13 @@ idle-time restarts:
 Scheduled by openclaw-gateway-hygiene.timer (OnCalendar every 10 min, wall-clock — the docs-check
 OnUnitActiveSec deadlock lesson). No action unless a threshold trips; one status line per run.
 
+COMPUTE GUARD (2026-10-27): an agent's heavy command started from the exec tool runs INSIDE this unit's cgroup. On
+10-26 11:44 a mesh there grew past the memory limit and systemd-oomd killed the whole gateway; on 10-27 a Pool-8 scorer
+there ran at nice 0 on all 12 CPUs (load 15, event-loop delay up to 19 s). Every pass, any process in the unit's cgroup
+other than the gateway's MainPID and signal-cli that has held >= GUARD_CORES of a core for >= GUARD_MIN_AGE_S is set to
+nice 15 and pinned to CPUs GUARD_CPUS (the house rule for heavy compute). Nothing is killed. Their summed RSS is logged
+as a WARNING above GUARD_RSS_WARN_GB. HYGIENE_GUARD_DRY=1 logs the actions without taking them.
+
 State: ~/.openclaw/router-state/gateway-hygiene.state.json   Log: /tmp/openclaw-gateway-hygiene.log
 Env knobs: HYGIENE_SOFT_GB, HYGIENE_HARD_GB, HYGIENE_MIN_GAP_HOURS, HYGIENE_IDLE_WINDOW_MIN,
            HYGIENE_SIGNAL_TARGET, HYGIENE_UNIT. Test hooks: HYGIENE_TEST_RSS_KB, HYGIENE_TEST_IDLE,
@@ -289,7 +296,103 @@ def record_and_check_trend(st, now, rss_kb, start):
     return True
 
 
+GUARD_CORES = float(os.getenv("HYGIENE_GUARD_CORES", "0.5"))
+GUARD_MIN_AGE_S = float(os.getenv("HYGIENE_GUARD_MIN_AGE_S", "300"))
+GUARD_NICE = int(os.getenv("HYGIENE_GUARD_NICE", "15"))
+_gc = os.getenv("HYGIENE_GUARD_CPUS", "0-7").split("-")
+GUARD_CPUS = set(range(int(_gc[0]), int(_gc[-1]) + 1))
+GUARD_RSS_WARN_KB = float(os.getenv("HYGIENE_GUARD_RSS_WARN_GB", "4")) * 1048576
+GUARD_EXEMPT = ("signal-cli", "/jre/bin/java")
+
+
+def guard_decide(procs, prev, now, main_pid):
+    """Pure decision. procs: [{pid, start, cpu_s, age_s, nice, cpus, cmd, rss_kb}]; prev: {str(pid): [start, cpu_s, ts]}.
+    Returns (actions, new_prev, other_rss_kb). An action is (pid, cmd, cores, age_s). The MainPID and signal-cli are
+    never acted on; a process already at >= GUARD_NICE and inside GUARD_CPUS needs nothing."""
+    actions, new_prev, other_rss = [], {}, 0.0
+    for p in procs:
+        pid = p["pid"]
+        if pid == main_pid or any(x in p["cmd"] for x in GUARD_EXEMPT):
+            continue
+        other_rss += p.get("rss_kb", 0.0)
+        new_prev[str(pid)] = [p["start"], p["cpu_s"], now]
+        old = prev.get(str(pid))
+        if old and old[0] == p["start"] and now > old[2]:
+            cores = (p["cpu_s"] - old[1]) / (now - old[2])
+        else:
+            cores = p["cpu_s"] / max(p["age_s"], 1.0)
+        if p["age_s"] < GUARD_MIN_AGE_S or cores < GUARD_CORES:
+            continue
+        if p["nice"] >= GUARD_NICE and set(p["cpus"]) <= set(GUARD_CPUS):
+            continue
+        actions.append((pid, p["cmd"], cores, p["age_s"]))
+    return actions, new_prev, other_rss
+
+
+def _cgroup_procs():
+    """The unit's processes as guard_decide wants them, plus the MainPID. Test hook HYGIENE_TEST_CGROUP_PROCS_JSON."""
+    if os.getenv("HYGIENE_TEST_CGROUP_PROCS_JSON"):
+        d = json.loads(os.environ["HYGIENE_TEST_CGROUP_PROCS_JSON"])
+        return d["procs"], d["main_pid"]
+    try:
+        show = subprocess.run(["systemctl", "--user", "show", UNIT, "-p", "MainPID", "-p", "ControlGroup"],
+                              capture_output=True, text=True, timeout=15).stdout
+        kv = dict(ln.split("=", 1) for ln in show.splitlines() if "=" in ln)
+        main_pid, cg = int(kv.get("MainPID") or 0), kv.get("ControlGroup", "")
+        if not main_pid or not cg:
+            return None, None
+        tick = os.sysconf("SC_CLK_TCK")
+        uptime = float(open("/proc/uptime").read().split()[0])
+        procs = []
+        for ln in open("/sys/fs/cgroup%s/cgroup.procs" % cg):
+            pid = int(ln)
+            try:
+                st = open("/proc/%d/stat" % pid).read()
+                f = st[st.rindex(")") + 2:].split()
+                cpu_s = (int(f[11]) + int(f[12])) / tick          # utime + stime
+                start = int(f[19])                                 # starttime, ticks since boot
+                nice = int(f[16])
+                cmd = open("/proc/%d/cmdline" % pid).read().replace("\0", " ").strip()[:120]
+                rss = 0.0
+                for sl in open("/proc/%d/status" % pid):
+                    if sl.startswith("VmRSS:"):
+                        rss = float(sl.split()[1])
+                procs.append({"pid": pid, "start": start, "cpu_s": cpu_s, "age_s": uptime - start / tick, "nice": nice,
+                              "cpus": sorted(os.sched_getaffinity(pid)), "cmd": cmd, "rss_kb": rss})
+            except (OSError, ValueError, IndexError):
+                continue                                           # exited mid-scan
+        return procs, main_pid
+    except Exception:
+        return None, None
+
+
+def guard_compute_in_gateway_cgroup(st, now):
+    procs, main_pid = _cgroup_procs()
+    if not procs or not main_pid:
+        return                                                     # unknown MainPID: never guess which process is the gateway
+    actions, st["guard_prev"], other_rss = guard_decide(procs, st.get("guard_prev", {}), now, main_pid)
+    dry = os.getenv("HYGIENE_GUARD_DRY") == "1"
+    for pid, cmd, cores, age in actions:
+        done = "dry-run" if dry else "applied"
+        if not dry:
+            try:
+                os.setpriority(os.PRIO_PROCESS, pid, GUARD_NICE)
+                for tid in os.listdir("/proc/%d/task" % pid):
+                    os.sched_setaffinity(int(tid), GUARD_CPUS)
+            except OSError as e:
+                done = "FAILED (%s)" % e
+        log("guard: pid %d '%s' in the gateway cgroup at %.2f cores for %.0f min -> nice %d, cpus %d-%d [%s]"
+            % (pid, cmd[:80], cores, age / 60, GUARD_NICE, min(GUARD_CPUS), max(GUARD_CPUS), done))
+    if other_rss >= GUARD_RSS_WARN_KB and now - st.get("guard_rss_warn_ts", 0) >= 3600:
+        log("guard: WARNING non-gateway processes hold %.1f GB inside the gateway cgroup; an out-of-memory kill there takes "
+            "the whole gateway (10-26 11:44)" % (other_rss / 1048576))
+        st["guard_rss_warn_ts"] = now
+
+
 def main():
+    st0 = load_state()
+    guard_compute_in_gateway_cgroup(st0, time.time())
+    save_state(st0)
     rss = gateway_rss_kb()
     if rss is None:
         log("status: gateway RSS unresolvable (unit down or PID gone) — no action")

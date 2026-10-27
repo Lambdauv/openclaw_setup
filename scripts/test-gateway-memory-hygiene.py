@@ -198,5 +198,38 @@ c, st, out = run_case("trend-restart-in-window", 2.3 * GB, idle=False, state={"r
 check("TREND" not in out and "message send" not in c, "22: samples before the gateway's start are dropped, no trend (out=%r)" % out[-200:])
 check(all(s[0] >= NOW - 6 * 3600 - 1 for s in st.get("rss_samples", [])), "22: pre-restart samples pruned")
 
+# --- COMPUTE GUARD (2026-10-27): an agent's heavy process inside the gateway cgroup is reniced and pinned, nothing else ---
+_spec = importlib.util.spec_from_file_location("hyg", os.path.join(HERE, "gateway-memory-hygiene.py"))
+H = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(H)
+ALL = list(range(12)); LOW = list(range(8))
+def P(pid, cores, age, nice=0, cpus=ALL, cmd="python3 dtc_p2u_scores.py", rss=130000.0, start=None):
+    return {"pid": pid, "start": start if start is not None else pid * 10, "cpu_s": cores * age, "age_s": age, "nice": nice,
+            "cpus": cpus, "cmd": cmd, "rss_kb": rss}
+MAIN = 100
+procs = [P(MAIN, 1.0, 3600, cmd="node --max-old-space-size=8192 ..."),               # the gateway itself: never
+         P(101, 0.97, 600),                                                         # a Pool worker at nice 0 on all CPUs: act
+         P(102, 0.97, 600, nice=15, cpus=LOW),                                      # already compliant: nothing
+         P(103, 1.0, 3600, cmd="/home/openclaw/jre/bin/java ... signal-cli"),      # signal-cli: never
+         P(104, 1.0, 60),                                                           # too young: nothing yet
+         P(105, 0.2, 3600)]                                                         # light: nothing
+acts, prev, other = H.guard_decide(procs, {}, NOW, MAIN)
+check([a[0] for a in acts] == [101], "23: only the heavy non-compliant worker is acted on (got %r)" % [a[0] for a in acts])
+check(str(MAIN) not in prev and "103" not in prev, "23: the gateway and signal-cli are not even tracked")
+check(abs(other - 4 * 130000.0) < 1, "23: other RSS sums the four non-exempt processes (%r)" % other)
+# the recent delta wins over the lifetime average: 1000 cpu-s over 1200 s, but only +30 cpu-s in the last 600 s
+w = P(106, 0, 1200); w["cpu_s"] = 1000.0
+acts, _, _ = H.guard_decide([w], {"106": [w["start"], 970.0, NOW - 600]}, NOW, MAIN)
+check(acts == [], "24: a worker that went quiet (0.05 cores over the last pass) is left alone")
+acts, _, _ = H.guard_decide([w], {"106": [w["start"] + 1, 970.0, NOW - 600]}, NOW, MAIN)
+check([a[0] for a in acts] == [106], "24: a reused pid (new start time) falls back to the lifetime rate")
+# end to end in the sandbox, dry-run: the log names the pid and says dry-run; no other behaviour changes
+fake = json.dumps({"main_pid": MAIN, "procs": procs})
+c, st, out = run_case("guard-dry", 1.0 * GB, idle=False,
+                      extra_env={"HYGIENE_TEST_CGROUP_PROCS_JSON": fake, "HYGIENE_GUARD_DRY": "1"})
+check("guard: pid 101" in out and "[dry-run]" in out and "pid 102" not in out and "pid 100 " not in out,
+      "25: the dry run logs exactly the worker (out=%r)" % out[-400:])
+check("101" in st.get("guard_prev", {}), "25: the guard's CPU baseline is saved in the state")
+check("restart" not in c, "25: the guard never restarts anything")
+
 print("PASS" if not fails else "FAILED (%d)" % len(fails))
 sys.exit(1 if fails else 0)
